@@ -253,4 +253,59 @@ class EnvironmentMapper:
         with rasterio.open(os.path.join(output_dir, "cost_map.tif"), 'w', **meta) as dst:
             dst.write(cost_map.astype(np.float32), 1)
         
-        self.logger.info(f"环境地图已保存到目录: {output_dir}") 
+        self.logger.info(f"环境地图已保存到目录: {output_dir}")
+    
+    def get_environment_params(self, row: int, col: int) -> dict:
+        """获取指定位置的环境参数
+        
+        Args:
+            row: 像素行号（从0开始）
+            col: 像素列号（从0开始）
+            
+        Returns:
+            包含环境参数的字典：
+            {
+                'max_speed': 最大速度 (m/s),
+                'typical_speed': 典型速度 (m/s),
+                'speed_stddev': 速度标准差 (m/s),
+                'cost': 移动成本 (s/m),
+                'landcover': 土地覆盖类型代码,
+                'slope_magnitude': 坡度大小 (度),
+                'slope_aspect': 坡向 (度),
+                'is_passable': 是否可通行
+            }
+        
+        Raises:
+            ValueError: 如果位置超出范围
+        """
+        # 检查位置是否在有效范围内
+        if not (0 <= row < self.height and 0 <= col < self.width):
+            raise ValueError(f"位置 ({row}, {col}) 超出范围")
+        
+        # 获取土地覆盖和坡度信息
+        landcover = self.landcover_data[row, col]
+        slope_magnitude = self.slope_magnitude_data[row, col]
+        slope_aspect = self.slope_aspect_data[row, col]
+        
+        # 判断是否可通行
+        is_passable = (
+            landcover not in IMPASSABLE_LANDCOVER_CODES and
+            slope_magnitude <= MAX_SLOPE_THRESHOLD
+        )
+        
+        # 获取环境参数
+        max_speed = self.calculate_max_speed_map()[row, col]
+        typical_speed = self.calculate_typical_speed_map()[row, col]
+        speed_stddev = self.calculate_speed_stddev_map()[row, col]
+        cost = self.calculate_cost_map()[row, col]
+        
+        return {
+            'max_speed': float(max_speed),
+            'typical_speed': float(typical_speed),
+            'speed_stddev': float(speed_stddev),
+            'cost': float(cost),
+            'landcover': int(landcover),
+            'slope_magnitude': float(slope_magnitude),
+            'slope_aspect': float(slope_aspect),
+            'is_passable': bool(is_passable)
+        } 

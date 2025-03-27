@@ -18,25 +18,29 @@ from src.generator.config import (
 def test_data():
     """创建测试用数据"""
     # 创建3000x3000的测试数据
-    landcover = np.full((3000, 3000), 31, dtype=np.int32)  # 默认为草地
+    landcover = np.full((3000, 3000), 11, dtype=np.int32)  # 默认为平原（可通行区域）
     
-    # 添加一些建筑用地和农田
-    landcover[400:500, 100:200] = 11  # 建筑用地
-    landcover[1000:1100, 2600:2700] = 21  # 农田
+    # 添加一些不同类型的地形
+    landcover[400:500, 100:200] = 12  # 草地
+    landcover[1000:1100, 2600:2700] = 21  # 山地
+    landcover[1200:1300, 1200:1300] = 13  # 灌木
+    landcover[1800:1900, 1800:1900] = 71  # 林地
     
     # 添加一些不可通行区域
     landcover[500:600, 500:600] = 81  # 水体
-    landcover[1500:1600, 1500:1600] = 82  # 冰川
+    landcover[1500:1600, 1500:1600] = 82  # 盐碱地
     
     # 创建坡度大小数据
     slope_magnitude = np.zeros((3000, 3000), dtype=np.float32)
     slope_magnitude[700:800, 700:800] = 50.0  # 陡峭区域
-    slope_magnitude[2000:2100, 2000:2100] = 45.0  # 较陡区域
+    slope_magnitude[2000:2100, 2000:2100] = 30.0  # 中等坡度区域
+    slope_magnitude[2200:2300, 2200:2300] = 15.0  # 缓坡区域
     
     # 创建坡向数据（北为0度，顺时针）
     slope_aspect = np.full((3000, 3000), -1, dtype=np.float32)  # -1表示平地
     slope_aspect[700:800, 700:800] = 45.0  # 东北向
     slope_aspect[2000:2100, 2000:2100] = 180.0  # 南向
+    slope_aspect[2200:2300, 2200:2300] = 90.0  # 东向
     
     return {
         'landcover': landcover,
@@ -282,4 +286,54 @@ class TestEnvironmentMapper:
                 test_files['landcover_path'],
                 str(small_file),
                 test_files['slope_aspect_path']
-            ) 
+            )
+    
+    def test_get_environment_params(self, test_files):
+        """测试获取环境参数"""
+        mapper = EnvironmentMapper(
+            test_files['landcover_path'],
+            test_files['slope_magnitude_path'],
+            test_files['slope_aspect_path']
+        )
+        
+        # 测试平原区域（可通行）
+        params = mapper.get_environment_params(100, 100)
+        assert params['landcover'] == 11  # 平原
+        assert params['is_passable'] == True
+        assert params['max_speed'] > 0
+        assert params['typical_speed'] > 0
+        assert params['speed_stddev'] >= 0
+        assert params['cost'] > 0 and np.isfinite(params['cost'])
+        
+        # 测试水体区域（不可通行）
+        params = mapper.get_environment_params(550, 550)  # 水体区域
+        assert params['landcover'] == 81  # 水体
+        assert params['is_passable'] == False
+        assert params['max_speed'] == 0
+        assert params['typical_speed'] == 0
+        assert params['speed_stddev'] == 0
+        assert np.isinf(params['cost'])
+        
+        # 测试陡峭区域（不可通行）
+        params = mapper.get_environment_params(750, 750)  # 陡峭区域
+        assert params['slope_magnitude'] > MAX_SLOPE_THRESHOLD
+        assert params['is_passable'] == False
+        assert params['max_speed'] == 0
+        assert params['typical_speed'] == 0
+        assert params['speed_stddev'] == 0
+        assert np.isinf(params['cost'])
+        
+        # 测试山地区域（可通行但速度受限）
+        params = mapper.get_environment_params(1050, 2650)  # 山地
+        assert params['landcover'] == 21  # 山地
+        assert params['is_passable'] == True
+        assert 0 < params['max_speed'] < MAX_SPEED
+        assert 0 < params['typical_speed'] <= params['max_speed']
+        assert params['speed_stddev'] > 0
+        assert params['cost'] > 0 and np.isfinite(params['cost'])
+        
+        # 测试无效位置
+        with pytest.raises(ValueError):
+            mapper.get_environment_params(-1, 0)  # 行号越界
+        with pytest.raises(ValueError):
+            mapper.get_environment_params(0, 3000)  # 列号越界 
