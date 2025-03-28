@@ -1,0 +1,21 @@
+# 轨迹生成数量
+NUM_TRAJECTORIES_TO_GENERATE: 100
+
+# 固定终点数量
+NUM_END_POINTS: 10
+
+# 起终点最小直线距离（米）
+MIN_START_END_DISTANCE_METERS: 5000
+
+# 城市/建成区地物编码
+URBAN_LANDCOVER_CODES:
+  - 1  # 城市建成区
+  - 2  # 城镇建成区
+  - 3  # 农村居民点
+
+# 不可通行地物编码
+IMPASSABLE_LANDCOVER_CODES:
+  - 4  # 水域
+  - 5  # 湿地
+  - 6  # 裸地
+  - 7  # 冰川积雪 
