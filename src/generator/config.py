@@ -62,4 +62,10 @@ IMPASSABLE_LANDCOVER_CODES = [
     41,  # 冰川
     81,  # 沼泽
     82,  # 盐碱地
-] 
+]
+
+# 起点选择相关参数
+MIN_START_END_DISTANCE_METERS = 1000.0  # 起终点最小距离（米）
+MIN_START_POINTS_SPACING = 250.0        # 起点之间的最小间距（米）
+MAX_SEARCH_RADIUS = 5000.0             # 最大搜索半径（米）
+MAX_SEARCH_ATTEMPTS = 1000             # 最大搜索尝试次数 

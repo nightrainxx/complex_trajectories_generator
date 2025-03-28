@@ -37,8 +37,9 @@ class TerrainAnalyzer:
             self.dem_data = src.read(1)
             self.transform = src.transform
             self.meta = src.meta.copy()
-            self.pixel_width = abs(self.transform[0])  # 像素宽度(米)
-            self.pixel_height = abs(self.transform[4])  # 像素高度(米)
+            # 计算实际的像素大小(米)
+            self.pixel_width = abs(self.transform[0]) * 111320  # 转换为米
+            self.pixel_height = abs(self.transform[4]) * 111320  # 转换为米
         
         # 初始化日志
         self.logger = logging.getLogger(__name__)
@@ -72,6 +73,10 @@ class TerrainAnalyzer:
         
         # 计算坡度(度)
         slope = np.degrees(np.arctan(np.sqrt(dx**2 + dy**2)))
+        
+        # 处理无效值
+        slope = np.nan_to_num(slope, 0)  # 将NaN替换为0
+        slope = np.clip(slope, 0, 90)  # 限制在0-90度范围内
         
         return slope
     

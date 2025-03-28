@@ -22,7 +22,11 @@ import logging
 from typing import List, Tuple, Dict, Optional
 import random
 
-from config import *
+from src.generator.config import (
+    MAX_SLOPE_THRESHOLD, IMPASSABLE_LANDCOVER_CODES,
+    MIN_START_END_DISTANCE_METERS, MAX_SEARCH_RADIUS,
+    MAX_SEARCH_ATTEMPTS, MIN_START_POINTS_SPACING
+)
 
 class PointSelector:
     """起点选择器类"""
@@ -49,6 +53,8 @@ class PointSelector:
         
         with rasterio.open(slope_path) as src:
             self.slope_data = src.read(1)
+            if src.transform != self.transform:
+                raise ValueError("土地覆盖和坡度数据的空间参考不一致")
         
         # 验证数据形状一致
         if self.landcover_data.shape != self.slope_data.shape:
@@ -125,7 +131,7 @@ class PointSelector:
         end_point: Tuple[int, int],
         num_points: int = 1,
         min_distance: float = MIN_START_END_DISTANCE_METERS,
-        max_attempts: int = 10000
+        max_attempts: int = MAX_SEARCH_ATTEMPTS
     ) -> List[Tuple[int, int]]:
         """为给定终点选择合适的起点
         
@@ -141,36 +147,41 @@ class PointSelector:
         selected_points = []
         attempts = 0
         min_pixel_distance = min_distance / self.pixel_size_meters
+        min_spacing = MIN_START_POINTS_SPACING / self.pixel_size_meters
         
         # 计算搜索范围
-        search_radius = int(min_pixel_distance * 1.5)  # 增加50%的搜索范围
+        max_radius = MAX_SEARCH_RADIUS / self.pixel_size_meters
+        search_radius = min(int(min_pixel_distance * 2), int(max_radius))
         
-        while len(selected_points) < num_points and attempts < max_attempts:
+        # 创建候选点网格
+        y, x = np.meshgrid(
+            np.arange(-search_radius, search_radius + 1),
+            np.arange(-search_radius, search_radius + 1)
+        )
+        distances = np.sqrt(x*x + y*y)
+        mask = distances >= min_pixel_distance
+        candidate_offsets = list(zip(y[mask].flat, x[mask].flat))
+        random.shuffle(candidate_offsets)
+        
+        while len(selected_points) < num_points and attempts < len(candidate_offsets):
+            # 获取下一个候选点
+            dy, dx = candidate_offsets[attempts]
+            row = int(end_point[0] + dy)
+            col = int(end_point[1] + dx)
             attempts += 1
-            
-            # 随机选择一个方向和距离
-            angle = random.uniform(0, 2 * np.pi)
-            distance = random.uniform(min_pixel_distance, min_pixel_distance * 2)
-            
-            # 计算候选起点坐标
-            row = int(end_point[0] + distance * np.cos(angle))
-            col = int(end_point[1] + distance * np.sin(angle))
             
             # 检查点是否可用
             if self.is_point_accessible(row, col):
                 # 检查与已选点的距离
                 too_close = False
                 for point in selected_points:
-                    if self.calculate_distance((row, col), point) < min_pixel_distance / 4:
+                    if self.calculate_distance((row, col), point) < min_spacing:
                         too_close = True
                         break
                 
-                # 检查与终点的实际地理距离
                 if not too_close:
-                    geo_distance = self.calculate_geo_distance((row, col), end_point)
-                    if geo_distance >= min_distance:
-                        selected_points.append((row, col))
-                        self.logger.debug(f"已选择起点: ({row}, {col})")
+                    selected_points.append((row, col))
+                    self.logger.debug(f"已选择起点: ({row}, {col})")
         
         if len(selected_points) < num_points:
             self.logger.warning(
@@ -182,7 +193,7 @@ class PointSelector:
     def select_start_points_for_all_ends(
         self,
         end_points: List[Dict],
-        points_per_end: int = NUM_TRAJECTORIES_PER_END
+        points_per_end: int = 3
     ) -> List[Tuple[Tuple[int, int], Tuple[int, int]]]:
         """为所有终点选择起点
         
@@ -218,7 +229,11 @@ class PointSelector:
         Returns:
             Tuple[float, float]: 地理坐标 (lon, lat)
         """
-        lon, lat = self.transform * (pixel[1], pixel[0])
+        # 注意：rasterio的transform期望(x, y)，而我们的输入是(row, col)
+        x, y = pixel[1], pixel[0]  # 转换为(x, y)
+        # 使用transform的逆变换
+        lon = x * self.transform[0] + self.transform[2]
+        lat = y * self.transform[4] + self.transform[5]
         return lon, lat
     
     def geo_to_pixel(self, coord: Tuple[float, float]) -> Tuple[int, int]:
@@ -230,5 +245,7 @@ class PointSelector:
         Returns:
             Tuple[int, int]: 像素坐标 (row, col)
         """
-        row, col = ~self.transform * coord
-        return int(row), int(col) 
+        # 使用transform的正变换
+        col = int((coord[0] - self.transform[2]) / self.transform[0])
+        row = int((coord[1] - self.transform[5]) / self.transform[4])
+        return row, col 
