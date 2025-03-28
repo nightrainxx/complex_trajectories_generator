@@ -10,7 +10,7 @@ with open("requirements.txt", "r", encoding="utf-8") as fh:
 
 setup(
     name="complex_trajectories_generator",
-    version="0.1.0",
+    version="0.1",
     author="作者名",
     author_email="邮箱",
     description="基于地形和环境约束的复杂轨迹生成系统",
@@ -27,7 +27,19 @@ setup(
         "Operating System :: OS Independent",
     ],
     python_requires=">=3.8",
-    install_requires=requirements,
+    install_requires=[
+        "numpy",
+        "pandas",
+        "scipy",
+        "matplotlib",
+        "seaborn",
+        "rasterio",
+        "geopandas",
+        "scikit-learn",
+        "pathfinding",
+        "scikit-image",
+        "richdem"
+    ],
     entry_points={
         "console_scripts": [
             "generate_trajectories=src.main:main",

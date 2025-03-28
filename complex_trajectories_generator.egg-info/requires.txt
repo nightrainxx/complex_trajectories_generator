@@ -1,0 +1,11 @@
+numpy
+pandas
+scipy
+matplotlib
+seaborn
+rasterio
+geopandas
+scikit-learn
+pathfinding
+scikit-image
+richdem
