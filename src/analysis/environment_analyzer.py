@@ -13,7 +13,7 @@ from scipy import stats
 from sklearn.preprocessing import KBinsDiscretizer
 
 from ..config import SLOPE_BINS, SLOPE_LABELS
-from ..data_processing import GISDataLoader, TrajectoryLoader
+from ..data_processing import TerrainLoader, OORDProcessor
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 class EnvironmentAnalyzer:
     """环境分析器，用于学习轨迹与环境的关系"""
     
-    def __init__(self, gis_loader: GISDataLoader):
+    def __init__(self, gis_loader: TerrainLoader):
         """
         初始化环境分析器
         

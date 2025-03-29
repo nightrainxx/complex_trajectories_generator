@@ -6,5 +6,6 @@
 from .terrain_loader import TerrainLoader
 from .terrain_analyzer import TerrainAnalyzer
 from .oord_processor import OORDProcessor
+from .data_loader import GISDataLoader
 
-__all__ = ['TerrainLoader', 'TerrainAnalyzer', 'OORDProcessor'] 
+__all__ = ['TerrainLoader', 'TerrainAnalyzer', 'OORDProcessor', 'GISDataLoader'] 

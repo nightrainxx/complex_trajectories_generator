@@ -21,8 +21,11 @@ from pathlib import Path
 import logging
 from typing import Dict, List, Tuple, Optional
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from sklearn.preprocessing import KBinsDiscretizer
+
+# 从统一配置文件导入配置
+from config import config
 
 @dataclass
 class EnvironmentGroup:
@@ -42,14 +45,14 @@ class EnvironmentGroup:
 class OORDAnalyzer:
     """OORD数据分析器类"""
     
-    def __init__(self, slope_bins: List[float], min_samples_per_group: int = 100):
+    def __init__(self, slope_bins: List[float] = None, min_samples_per_group: int = 100):
         """初始化分析器
         
         Args:
             slope_bins: 坡度分组边界值列表
             min_samples_per_group: 每个环境组的最小样本数
         """
-        self.slope_bins = slope_bins
+        self.slope_bins = slope_bins or config['terrain']['SLOPE_BINS']
         self.min_samples_per_group = min_samples_per_group
         self.logger = logging.getLogger(__name__)
         self.environment_groups: Dict[str, EnvironmentGroup] = {}
@@ -151,9 +154,9 @@ class OORDAnalyzer:
         for group_label, group_data in groups:
             # 检查样本数量
             if len(group_data) < self.min_samples_per_group:
-                self.logger.warning(f"组 {group_label} 样本数量不足，跳过")
-                continue
-            
+                self.logger.warning(f"环境组 {group_label} 样本数量不足: {len(group_data)} < {self.min_samples_per_group}")
+                # 即使样本不足，也尝试使用
+                
             # 提取landcover和slope_bin
             landcover_code = int(group_data['landcover'].iloc[0])  # 转换为Python int
             slope_bin = int(group_data['slope_bin'].iloc[0])  # 转换为Python int
@@ -172,6 +175,13 @@ class OORDAnalyzer:
                 max_acceleration=float(np.percentile(abs(group_data['acceleration_mps2']), 95)),
                 typical_acceleration=float(group_data['acceleration_mps2'].median())
             )
+            
+            # 记录环境组统计信息
+            self.logger.info(f"环境组 {group_label}: "
+                          f"样本数={len(group_data)}, "
+                          f"典型速度={self.environment_groups[group_label].typical_speed:.2f}m/s, "
+                          f"最大速度={self.environment_groups[group_label].max_speed:.2f}m/s, "
+                          f"速度标准差={self.environment_groups[group_label].speed_stddev:.2f}m/s")
     
     def analyze_slope_direction_effect(self, df: pd.DataFrame) -> Dict:
         """分析坡向对速度的影响
@@ -228,15 +238,16 @@ class OORDAnalyzer:
         
         return effect_params
     
-    def save_analysis_results(self, output_dir: str) -> None:
+    def save_analysis_results(self, output_path: str, effect_params: Optional[Dict] = None) -> None:
         """保存分析结果
         
         Args:
-            output_dir: 输出目录路径
+            output_path: 输出文件路径
+            effect_params: 可选的坡向影响系数，如果为None则只保存环境组数据
         """
         # 确保输出目录存在
-        output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         
         # 将环境组数据转换为字典
         groups_dict = {
@@ -255,34 +266,41 @@ class OORDAnalyzer:
             for label, group in self.environment_groups.items()
         }
         
-        # 保存为JSON文件
-        with open(output_dir / 'environment_groups.json', 'w') as f:
-            json.dump(groups_dict, f, indent=4)
-        
-        self.logger.info(f"分析结果已保存到: {output_dir}")
-    
-    def load_analysis_results(self, input_dir: str) -> None:
-        """加载分析结果
-        
-        Args:
-            input_dir: 输入目录路径
-        """
-        input_path = Path(input_dir) / 'environment_groups.json'
-        
-        if not input_path.exists():
-            raise FileNotFoundError(f"找不到分析结果文件: {input_path}")
-        
-        # 从JSON文件加载数据
-        with open(input_path, 'r') as f:
-            groups_dict = json.load(f)
-        
-        # 转换为EnvironmentGroup对象
-        self.environment_groups = {
-            label: EnvironmentGroup(
-                group_label=label,
-                **{k: v for k, v in data.items()}
-            )
-            for label, data in groups_dict.items()
+        # 合并环境组数据和坡向影响系数（如果提供）
+        result_dict = {
+            'environment_groups': groups_dict
         }
         
-        self.logger.info(f"已加载分析结果: {len(self.environment_groups)} 个环境组") 
+        if effect_params:
+            result_dict['slope_direction_effects'] = effect_params
+        
+        # 添加元数据
+        result_dict['metadata'] = {
+            'num_groups': len(groups_dict),
+            'min_samples_per_group': self.min_samples_per_group,
+            'slope_bins': self.slope_bins
+        }
+        
+        # 保存为JSON文件
+        with open(output_path, 'w') as f:
+            json.dump(result_dict, f, indent=2)
+        
+        self.logger.info(f"分析结果已保存至: {output_path}")
+        self.logger.info(f"共保存了 {len(groups_dict)} 个环境组的数据")
+        
+        # 输出每个环境组的基本信息 (前5个)
+        top_groups = list(groups_dict.items())[:5]
+        for label, data in top_groups:
+            self.logger.info(f"环境组 {label}: 典型速度={data['typical_speed']:.2f}m/s, "
+                          f"最大速度={data['max_speed']:.2f}m/s, "
+                          f"速度标准差={data['speed_stddev']:.2f}m/s")
+    
+    def save_environment_groups(self, output_path: str) -> None:
+        """仅保存环境组数据
+        
+        这是一个便捷的包装方法，用于快速保存环境组数据
+        
+        Args:
+            output_path: 输出文件路径
+        """
+        self.save_analysis_results(output_path) 

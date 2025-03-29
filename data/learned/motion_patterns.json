@@ -1,0 +1,29 @@
+{
+  "LCUnknown_SAFlat_CSnan": {
+    "typical_speed": 6.1137830513658,
+    "speed_std": 0.5275336717654131,
+    "min_speed": 5.0,
+    "max_speed": 8.455830912073033,
+    "avg_slope_along": 0.0,
+    "avg_cross_slope": 0.0,
+    "sample_count": 84
+  },
+  "LCUrban_SAModUp_CSHigh": {
+    "typical_speed": 9.31716691870366,
+    "speed_std": 0.5815388104082706,
+    "min_speed": 9.15236787718961,
+    "max_speed": 9.481965960217709,
+    "avg_slope_along": 9.592154403680029,
+    "avg_cross_slope": 89.29800645677278,
+    "sample_count": 2
+  },
+  "LCUrban_SASteepUp_CSHigh": {
+    "typical_speed": 10.831001648212105,
+    "speed_std": 0.7453542779860843,
+    "min_speed": 8.943983577826854,
+    "max_speed": 12.022006643668524,
+    "avg_slope_along": 33.727002741783934,
+    "avg_cross_slope": 82.82390453902542,
+    "sample_count": 9
+  }
+}

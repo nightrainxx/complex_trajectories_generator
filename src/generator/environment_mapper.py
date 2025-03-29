@@ -10,6 +10,7 @@
     - 土地覆盖栅格文件 (.tif)
     - 坡度大小栅格文件 (.tif)
     - 坡度方向栅格文件 (.tif)
+    - 环境组学习结果文件 (.json) (可选，使用学习结果生成地图)
 
 输出:
     - 最大速度地图 (max_speed_map.tif)
@@ -22,27 +23,37 @@ import numpy as np
 import rasterio
 from pathlib import Path
 import logging
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Dict, Any
 import os
+import json
 
-from src.generator.config import (
-    MAX_SPEED, MAX_SLOPE_THRESHOLD, SLOPE_SPEED_FACTOR,
+# 从统一配置文件导入配置
+from config import (
+    SLOPE_BINS, MAX_SLOPE_THRESHOLD, 
+    LANDCOVER_SPEED_FACTORS, LANDCOVER_COST_FACTORS,
     TYPICAL_SPEED_FACTOR, UP_SLOPE_FACTOR, DOWN_SLOPE_FACTOR, CROSS_SLOPE_FACTOR,
     BASE_SPEED_STDDEV_FACTOR, SLOPE_STDDEV_FACTOR, COMPLEX_TERRAIN_STDDEV_FACTOR,
-    COMPLEX_TERRAIN_CODES, LANDCOVER_SPEED_FACTORS, LANDCOVER_COST_FACTORS,
-    IMPASSABLE_LANDCOVER_CODES
+    COMPLEX_TERRAIN_CODES, IMPASSABLE_LANDCOVER_CODES,
+    MAX_SPEED, DEFAULT_SPEED
 )
 
 class EnvironmentMapper:
     """环境地图生成器类"""
     
-    def __init__(self, landcover_path: str, slope_magnitude_path: str, slope_aspect_path: str):
+    def __init__(
+        self, 
+        landcover_path: str, 
+        slope_magnitude_path: str, 
+        slope_aspect_path: str,
+        environment_groups_path: Optional[str] = None
+    ):
         """初始化环境地图生成器
         
         Args:
             landcover_path: 土地覆盖栅格文件路径
             slope_magnitude_path: 坡度大小栅格文件路径
             slope_aspect_path: 坡度方向栅格文件路径
+            environment_groups_path: 环境组学习结果文件路径(可选)
         """
         # 检查文件是否存在
         for path in [landcover_path, slope_magnitude_path, slope_aspect_path]:
@@ -69,116 +80,229 @@ class EnvironmentMapper:
         
         # 初始化日志
         self.logger = logging.getLogger(__name__)
+        
+        # 加载环境组数据（如果提供）
+        self.environment_groups = {}
+        if environment_groups_path and Path(environment_groups_path).exists():
+            try:
+                with open(environment_groups_path, 'r') as f:
+                    self.environment_groups = json.load(f)
+                self.logger.info(f"已加载环境组数据: {len(self.environment_groups)}个组")
+                
+                # 记录学习到的环境组信息
+                for group_label, group_data in self.environment_groups.items():
+                    self.logger.debug(f"环境组 {group_label}: 典型速度={group_data.get('typical_speed', 'N/A')}, "
+                                    f"最大速度={group_data.get('max_speed', 'N/A')}, "
+                                    f"速度标准差={group_data.get('speed_stddev', 'N/A')}")
+            except Exception as e:
+                self.logger.error(f"加载环境组数据失败: {e}")
+                self.environment_groups = {}
+    
+    def _get_slope_bin(self, slope_magnitude: float) -> int:
+        """获取坡度等级
+        
+        Args:
+            slope_magnitude: 坡度大小(度)
+            
+        Returns:
+            int: 坡度等级
+        """
+        return np.digitize(slope_magnitude, SLOPE_BINS) - 1
+    
+    def _get_group_label(self, landcover_code: int, slope_magnitude: float) -> str:
+        """获取环境组标签
+        
+        Args:
+            landcover_code: 土地覆盖类型代码
+            slope_magnitude: 坡度大小(度)
+            
+        Returns:
+            str: 环境组标签
+        """
+        slope_bin = self._get_slope_bin(slope_magnitude)
+        return f"LC{landcover_code}_S{slope_bin}"
+    
+    def _get_environment_values(self, landcover_code: int, slope_magnitude: float) -> Dict[str, float]:
+        """获取环境组的值
+        
+        根据环境组标签获取对应的环境参数值，如果找不到则使用默认规则计算
+        
+        Args:
+            landcover_code: 土地覆盖类型代码
+            slope_magnitude: 坡度大小(度)
+            
+        Returns:
+            Dict[str, float]: 包含typical_speed, max_speed, speed_stddev的字典
+        """
+        # 生成环境组标签
+        group_label = self._get_group_label(landcover_code, slope_magnitude)
+        
+        # 检查是否在学习到的环境组中
+        if group_label in self.environment_groups:
+            group_data = self.environment_groups[group_label]
+            return {
+                'typical_speed': group_data.get('typical_speed', DEFAULT_SPEED),
+                'max_speed': group_data.get('max_speed', MAX_SPEED),
+                'speed_stddev': group_data.get('speed_stddev', DEFAULT_SPEED * BASE_SPEED_STDDEV_FACTOR)
+            }
+        else:
+            # 使用默认规则计算
+            return self._calculate_default_values(landcover_code, slope_magnitude)
+    
+    def _calculate_default_values(self, landcover_code: int, slope_magnitude: float) -> Dict[str, float]:
+        """使用默认规则计算环境参数值
+        
+        Args:
+            landcover_code: 土地覆盖类型代码
+            slope_magnitude: 坡度大小(度)
+            
+        Returns:
+            Dict[str, float]: 包含typical_speed, max_speed, speed_stddev的字典
+        """
+        # 计算最大速度
+        # 1. 检查是否可通行
+        if landcover_code in IMPASSABLE_LANDCOVER_CODES or slope_magnitude > MAX_SLOPE_THRESHOLD:
+            return {
+                'typical_speed': 0.0,
+                'max_speed': 0.0,
+                'speed_stddev': 0.0
+            }
+        
+        # 2. 应用坡度影响
+        slope_factor = np.clip(1 - SLOPE_SPEED_FACTOR * slope_magnitude, 0.1, 1.0)
+        
+        # 3. 应用土地覆盖影响
+        lc_factor = LANDCOVER_SPEED_FACTORS.get(landcover_code, 1.0)
+        
+        # 计算最大速度
+        max_speed = MAX_SPEED * slope_factor * lc_factor
+        
+        # 计算典型速度
+        typical_speed = max_speed * TYPICAL_SPEED_FACTOR
+        
+        # 计算速度标准差
+        stddev_factor = 1.0
+        if landcover_code in COMPLEX_TERRAIN_CODES:
+            stddev_factor *= COMPLEX_TERRAIN_STDDEV_FACTOR
+        
+        slope_stddev_factor = np.clip(
+            1 + SLOPE_STDDEV_FACTOR * (slope_magnitude / MAX_SLOPE_THRESHOLD),
+            1.0,
+            2.0
+        )
+        stddev_factor *= slope_stddev_factor
+        
+        speed_stddev = typical_speed * BASE_SPEED_STDDEV_FACTOR * stddev_factor
+        
+        return {
+            'typical_speed': typical_speed,
+            'max_speed': max_speed,
+            'speed_stddev': speed_stddev
+        }
     
     def calculate_max_speed_map(self) -> np.ndarray:
         """计算最大速度地图
         
         基于坡度大小和土地覆盖类型计算每个像素的最大可能速度。
-        不可通行区域（水体、冰川、陡峭区域）的速度设为0。
+        如果有学习结果，则优先使用学习结果。
         
         Returns:
             np.ndarray: 最大速度地图（米/秒）
         """
         # 初始化最大速度地图
-        max_speed = np.full(self.landcover_data.shape, MAX_SPEED, dtype=np.float32)
+        max_speed = np.zeros(self.landcover_data.shape, dtype=np.float32)
         
-        # 处理不可通行区域
-        impassable_mask = np.isin(self.landcover_data, IMPASSABLE_LANDCOVER_CODES)
-        steep_mask = self.slope_magnitude_data > MAX_SLOPE_THRESHOLD
-        max_speed[impassable_mask | steep_mask] = 0
+        # 使用学习结果或默认规则计算每个像素的最大速度
+        for i in range(self.height):
+            for j in range(self.width):
+                landcover_code = int(self.landcover_data[i, j])
+                slope_magnitude = self.slope_magnitude_data[i, j]
+                
+                env_values = self._get_environment_values(landcover_code, slope_magnitude)
+                max_speed[i, j] = env_values['max_speed']
         
-        # 应用坡度影响
-        slope_factor = np.clip(1 - SLOPE_SPEED_FACTOR * self.slope_magnitude_data, 0.1, 1.0)
-        max_speed *= slope_factor
-        
-        # 应用土地覆盖影响
-        for code, factor in LANDCOVER_SPEED_FACTORS.items():
-            landcover_mask = self.landcover_data == code
-            max_speed[landcover_mask] *= factor
+        # 记录速度图统计信息
+        self.logger.info(f"最大速度图统计:")
+        valid_speeds = max_speed[max_speed > 0]
+        if len(valid_speeds) > 0:
+            self.logger.info(f"  最大值: {np.max(valid_speeds):.2f} m/s")
+            self.logger.info(f"  最小值: {np.min(valid_speeds):.2f} m/s")
+            self.logger.info(f"  平均值: {np.mean(valid_speeds):.2f} m/s")
+            self.logger.info(f"  标准差: {np.std(valid_speeds):.2f} m/s")
+            self.logger.info(f"  不同值数量: {len(np.unique(valid_speeds))}")
+        else:
+            self.logger.warning("最大速度图中没有有效的速度值")
         
         return max_speed
     
     def calculate_typical_speed_map(self) -> np.ndarray:
         """计算典型速度地图
         
-        基于最大速度，考虑坡度方向对速度的影响。
-        上坡时速度降低，下坡时速度略有提升，横坡时速度显著降低。
+        基于学习结果或默认规则计算每个像素的典型速度。
         
         Returns:
             np.ndarray: 典型速度地图（米/秒）
         """
-        # 获取基础最大速度
-        typical_speed = self.calculate_max_speed_map() * TYPICAL_SPEED_FACTOR
+        # 初始化典型速度地图
+        typical_speed = np.zeros(self.landcover_data.shape, dtype=np.float32)
         
-        # 处理平地（坡向为-1）
-        flat_mask = self.slope_aspect_data == -1
-        typical_speed[flat_mask] *= 1.0  # 平地不需要额外调整
+        # 使用学习结果或默认规则计算每个像素的典型速度
+        for i in range(self.height):
+            for j in range(self.width):
+                landcover_code = int(self.landcover_data[i, j])
+                slope_magnitude = self.slope_magnitude_data[i, j]
+                
+                env_values = self._get_environment_values(landcover_code, slope_magnitude)
+                typical_speed[i, j] = env_values['typical_speed']
         
-        # 处理有坡度的区域
-        slope_mask = ~flat_mask
-        if np.any(slope_mask):
-            # 计算不同方向的影响因子
-            # 这里假设我们主要考虑南北方向的运动
-            # 坡向0度是北向，180度是南向
-            north_factor = np.where(
-                self.slope_aspect_data < 90,
-                1 - UP_SLOPE_FACTOR * self.slope_magnitude_data,
-                1.0
-            )
-            south_factor = np.where(
-                self.slope_aspect_data > 90,
-                1 + DOWN_SLOPE_FACTOR * self.slope_magnitude_data,
-                1.0
-            )
+        # 记录速度图统计信息
+        self.logger.info(f"典型速度图统计:")
+        valid_speeds = typical_speed[typical_speed > 0]
+        if len(valid_speeds) > 0:
+            self.logger.info(f"  最大值: {np.max(valid_speeds):.2f} m/s")
+            self.logger.info(f"  最小值: {np.min(valid_speeds):.2f} m/s")
+            self.logger.info(f"  平均值: {np.mean(valid_speeds):.2f} m/s")
+            self.logger.info(f"  标准差: {np.std(valid_speeds):.2f} m/s")
+            self.logger.info(f"  不同值数量: {len(np.unique(valid_speeds))}")
             
-            # 计算横坡影响（东西方向）
-            cross_slope_factor = np.where(
-                (self.slope_aspect_data >= 45) & (self.slope_aspect_data <= 135) |
-                (self.slope_aspect_data >= 225) & (self.slope_aspect_data <= 315),
-                1 - CROSS_SLOPE_FACTOR * self.slope_magnitude_data,
-                1.0
-            )
-            
-            # 组合所有影响因子
-            combined_factor = np.minimum(north_factor, south_factor) * cross_slope_factor
-            combined_factor = np.clip(combined_factor, 0.1, 1.2)  # 限制因子范围
-            
-            # 应用到典型速度
-            typical_speed[slope_mask] *= combined_factor[slope_mask]
+            # 如果速度图异常（如恒定值），发出警告
+            if len(np.unique(valid_speeds)) < 10:
+                self.logger.warning("典型速度图变化很小，可能导致模拟轨迹速度恒定")
+        else:
+            self.logger.warning("典型速度图中没有有效的速度值")
         
         return typical_speed
     
     def calculate_speed_stddev_map(self) -> np.ndarray:
         """计算速度标准差地图
         
-        基于典型速度和地形复杂度计算速度的标准差。
-        复杂地形（如山地）的标准差较大，平坦区域的标准差较小。
+        基于学习结果或默认规则计算每个像素的速度标准差。
         
         Returns:
             np.ndarray: 速度标准差地图（米/秒）
         """
-        # 获取典型速度
-        typical_speed = self.calculate_typical_speed_map()
+        # 初始化速度标准差地图
+        speed_stddev = np.zeros(self.landcover_data.shape, dtype=np.float32)
         
-        # 初始化标准差地图
-        speed_stddev = typical_speed * BASE_SPEED_STDDEV_FACTOR
+        # 使用学习结果或默认规则计算每个像素的速度标准差
+        for i in range(self.height):
+            for j in range(self.width):
+                landcover_code = int(self.landcover_data[i, j])
+                slope_magnitude = self.slope_magnitude_data[i, j]
+                
+                env_values = self._get_environment_values(landcover_code, slope_magnitude)
+                speed_stddev[i, j] = env_values['speed_stddev']
         
-        # 处理不可通行区域
-        impassable_mask = np.isin(self.landcover_data, IMPASSABLE_LANDCOVER_CODES)
-        steep_mask = self.slope_magnitude_data > MAX_SLOPE_THRESHOLD
-        speed_stddev[impassable_mask | steep_mask] = 0
-        
-        # 增加复杂地形的标准差
-        complex_mask = np.isin(self.landcover_data, COMPLEX_TERRAIN_CODES)
-        speed_stddev[complex_mask] *= COMPLEX_TERRAIN_STDDEV_FACTOR
-        
-        # 根据坡度增加标准差
-        slope_stddev_factor = np.clip(
-            1 + SLOPE_STDDEV_FACTOR * (self.slope_magnitude_data / MAX_SLOPE_THRESHOLD),
-            1.0,
-            2.0
-        )
-        speed_stddev *= slope_stddev_factor
+        # 记录速度标准差图统计信息
+        self.logger.info(f"速度标准差图统计:")
+        valid_stddevs = speed_stddev[speed_stddev > 0]
+        if len(valid_stddevs) > 0:
+            self.logger.info(f"  最大值: {np.max(valid_stddevs):.2f} m/s")
+            self.logger.info(f"  最小值: {np.min(valid_stddevs):.2f} m/s")
+            self.logger.info(f"  平均值: {np.mean(valid_stddevs):.2f} m/s")
+            self.logger.info(f"  标准差: {np.std(valid_stddevs):.2f} m/s")
+        else:
+            self.logger.warning("速度标准差图中没有有效的值")
         
         return speed_stddev
     
@@ -204,14 +328,40 @@ class EnvironmentMapper:
         
         # 计算可通行区域的成本
         passable_mask = ~(impassable_mask | steep_mask)
-        cost[passable_mask] = 1 / typical_speed[passable_mask]  # 基础成本：单位距离所需时间
+        # 确保不除以零
+        valid_speed_mask = (typical_speed > 0) & passable_mask
+        cost[valid_speed_mask] = 1 / typical_speed[valid_speed_mask]  # 基础成本：单位距离所需时间
         
         # 应用土地覆盖成本因子
         for code, factor in LANDCOVER_COST_FACTORS.items():
             landcover_mask = self.landcover_data == code
-            cost[landcover_mask & passable_mask] *= factor
+            cost[landcover_mask & valid_speed_mask] *= factor
         
         return cost
+    
+    def generate_environment_maps(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """生成所有环境地图
+        
+        Returns:
+            Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]: 
+                (最大速度地图, 典型速度地图, 速度标准差地图, 成本地图)
+        """
+        self.logger.info("开始生成环境地图...")
+        
+        # 生成各类地图
+        max_speed_map = self.calculate_max_speed_map()
+        self.logger.info("最大速度地图生成完成")
+        
+        typical_speed_map = self.calculate_typical_speed_map()
+        self.logger.info("典型速度地图生成完成")
+        
+        speed_stddev_map = self.calculate_speed_stddev_map()
+        self.logger.info("速度标准差地图生成完成")
+        
+        cost_map = self.calculate_cost_map()
+        self.logger.info("成本地图生成完成")
+        
+        return max_speed_map, typical_speed_map, speed_stddev_map, cost_map
     
     def save_environment_maps(
         self,
@@ -253,7 +403,7 @@ class EnvironmentMapper:
         with rasterio.open(os.path.join(output_dir, "cost_map.tif"), 'w', **meta) as dst:
             dst.write(cost_map.astype(np.float32), 1)
         
-        self.logger.info(f"环境地图已保存到目录: {output_dir}")
+        self.logger.info(f"环境地图已保存到: {output_dir}")
     
     def get_environment_params(self, row: int, col: int) -> dict:
         """获取指定位置的环境参数

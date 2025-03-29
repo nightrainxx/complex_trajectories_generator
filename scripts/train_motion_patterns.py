@@ -1,116 +1,96 @@
 """
-运动模式学习脚本
-从OORD数据中学习目标在不同环境下的运动特性
+训练运动模式的主脚本
 """
-
-import logging
 import os
-from pathlib import Path
-
-import numpy as np
 import pandas as pd
+import logging
+from pathlib import Path
+from src.learning.motion_pattern_learner import MotionPatternLearner
+from src.utils.config import WINDOWED_FEATURES_PATH, LEARNED_PATTERNS_PATH
 
-from src.data_processing import TerrainLoader, OORDProcessor, MotionPatternLearner
-from src.utils.logging_utils import setup_logging
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+def load_trajectory_data(file_path: str) -> pd.DataFrame:
+    """加载轨迹数据
+    
+    Args:
+        file_path: 轨迹CSV文件路径
+        
+    Returns:
+        处理后的轨迹DataFrame
+    """
+    logger.info(f"Loading trajectory data from {file_path}")
+    df = pd.read_csv(file_path)
+    
+    # 设置时间索引
+    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
+    df.set_index('timestamp', inplace=True)
+    
+    # 确保数据按时间排序
+    df.sort_index(inplace=True)
+    
+    # 验证必需的列
+    required_columns = [
+        'longitude', 'latitude', 'speed_mps', 'heading_degrees',
+        'slope_magnitude', 'slope_aspect', 'landcover'
+    ]
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    if missing_columns:
+        raise ValueError(f"Missing required columns: {missing_columns}")
+        
+    return df
 
 def main():
-    # 设置日志
-    setup_logging()
-    logger = logging.getLogger(__name__)
-    logger.info("开始运动模式学习")
-    
-    # 创建输出目录
-    output_dir = Path("data/output/intermediate")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # 加载地形数据
-    logger.info("加载地形数据...")
-    terrain_loader = TerrainLoader()
-    terrain_loader.load_dem("data/input/gis/dem_30m_100km.tif")
-    terrain_loader.load_landcover("data/input/gis/landcover_30m_100km.tif")
-    
-    # 加载OORD轨迹数据
-    logger.info("加载OORD轨迹数据...")
-    oord_processor = OORDProcessor(terrain_loader)
-    trajectories = []
-    
-    oord_dir = Path("data/input/oord")
-    for file in oord_dir.glob("*.csv"):
-        try:
-            traj = oord_processor.load_trajectory(file)
-            if traj is not None and len(traj) > 0:
-                trajectories.append(traj)
-                logger.info(f"成功加载轨迹: {file.name}")
-            else:
-                logger.warning(f"轨迹为空: {file.name}")
-        except Exception as e:
-            logger.error(f"加载轨迹失败 {file.name}: {str(e)}")
-    
-    if not trajectories:
-        logger.error("未找到有效的轨迹数据")
-        return
-    
-    logger.info(f"共加载 {len(trajectories)} 条轨迹")
-    
-    # 创建运动模式学习器
-    logger.info("开始学习运动模式...")
-    learner = MotionPatternLearner(terrain_loader)
+    """主函数"""
+    # 设置输入文件路径
+    base_dir = Path("/home/yzc/data/Sucess_or_Die/complex_trajectories_generator")
+    trajectory_file = base_dir / "data/processed/trajectory_1_processed.csv"
     
     try:
-        # 执行学习
-        learner.learn_from_trajectories(trajectories)
+        # 1. 加载轨迹数据
+        trajectory_df = load_trajectory_data(str(trajectory_file))
+        logger.info(f"Loaded trajectory with {len(trajectory_df)} points")
         
-        # 保存学习结果
-        output_file = output_dir / "learned_patterns.pkl"
-        learner.save_patterns(str(output_file))
-        logger.info(f"学习结果已保存到: {output_file}")
+        # 2. 创建学习器实例
+        learner = MotionPatternLearner()
         
-        # 输出学习结果摘要
-        patterns = learner.get_learned_patterns()
+        # 3. 执行学习过程
+        logger.info("Starting motion pattern learning...")
+        learner.learn_from_trajectory(trajectory_df)
         
-        logger.info("\n=== 学习结果摘要 ===")
+        # 4. 生成残差分析图
+        logger.info("生成残差分析图...")
+        learner.plot_residual_analysis()
         
-        # 坡度-速度关系
-        slope_speed = patterns['slope_speed_model']
-        logger.info("\n坡度-速度关系:")
-        logger.info(f"平地速度(0-5度): {slope_speed.iloc[0]['mean']:.2f} m/s")
-        logger.info(f"速度因子范围: {slope_speed['speed_factor'].min():.2f} - {slope_speed['speed_factor'].max():.2f}")
+        # 5. 保存结果
+        learner.save_results()
+        logger.info(f"Results saved to {LEARNED_PATTERNS_PATH}")
+        logger.info(f"Windowed features saved to {WINDOWED_FEATURES_PATH}")
         
-        # 地表类型-速度关系
-        landcover_speed = patterns['landcover_speed_stats']
-        logger.info("\n地表类型-速度关系:")
-        for lc_type, stats in landcover_speed.iterrows():
-            logger.info(f"类型 {lc_type}: 平均速度 = {stats['mean']:.2f} m/s, 速度因子 = {stats['speed_factor']:.2f}")
+        # 6. 输出分析报告摘要
+        logger.info("\n分析报告摘要:")
+        logger.info(f"R² Score: {learner.analysis_report['r2_scores']['basic']:.4f}")
+        logger.info(f"环境组总数: {len(learner.learned_patterns)}")
+        logger.info(f"样本不足的组数: {len(learner.analysis_report['warnings'])}")
         
-        # 转向率统计
-        turn_rate = patterns['turn_rate_stats']
-        logger.info("\n转向率统计:")
-        logger.info(f"平均值: {turn_rate['mean']:.2f} rad/s")
-        logger.info(f"标准差: {turn_rate['std']:.2f} rad/s")
-        logger.info(f"90百分位: {turn_rate['percentiles']['90']:.2f} rad/s")
-        
-        # 加速度统计
-        accel = patterns['acceleration_stats']
-        logger.info("\n加速度统计:")
-        logger.info(f"平均值: {accel['mean']:.2f} m/s²")
-        logger.info(f"标准差: {accel['std']:.2f} m/s²")
-        logger.info(f"90百分位: {accel['percentiles']['90']:.2f} m/s²")
-        
-        # 环境聚类
-        clusters = patterns['environment_clusters']
-        logger.info(f"\n环境聚类 (k={clusters['n_clusters']}):")
-        for i, stats in enumerate(clusters['cluster_stats']):
-            logger.info(f"\n簇 {i+1}:")
-            logger.info(f"样本数: {stats['size']}")
-            logger.info(f"平均坡度: {stats['slope_mean']:.1f}° (±{stats['slope_std']:.1f}°)")
-            logger.info(f"主要地表类型: {stats['landcover_mode']}")
-            logger.info(f"平均速度: {stats['speed_mean']:.2f} m/s (±{stats['speed_std']:.2f} m/s)")
-        
+        # 7. 输出残差分析结果
+        residual_analysis = learner.analysis_report['residual_analysis']
+        logger.info("\n残差分布分析:")
+        logger.info(f"均值: {residual_analysis['mean']:.4f}")
+        logger.info(f"标准差: {residual_analysis['std']:.4f}")
+        logger.info(f"偏度: {residual_analysis['skewness']:.4f}")
+        logger.info(f"峰度: {residual_analysis['kurtosis']:.4f}")
+        shapiro_stat, shapiro_p = residual_analysis['shapiro_test']
+        logger.info(f"Shapiro-Wilk正态性检验: 统计量={shapiro_stat:.4f}, p值={shapiro_p:.4f}")
+            
     except Exception as e:
-        logger.error(f"学习过程失败: {str(e)}")
+        logger.error(f"Error during training: {str(e)}", exc_info=True)
         raise
-    
-    logger.info("运动模式学习完成")
 
 if __name__ == "__main__":
     main() 

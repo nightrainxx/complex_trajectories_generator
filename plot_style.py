@@ -3,50 +3,43 @@ matplotlib作图样式配置文件
 将此文件放在项目根目录下，在绘图时导入即可使用统一的样式
 """
 import matplotlib.pyplot as plt
-import matplotlib as mpl
-from pathlib import Path
+import matplotlib.font_manager as fm
+import os
 
-def setup_style():
-    """设置matplotlib的默认样式"""
-    # 设置字体路径
-    FONT_PATHS = {
-        'times': '/usr/share/fonts/truetype/custom/times.ttf',
-        'simsun': '/usr/share/fonts/truetype/custom/simsun.ttc'
-    }
-    
-    # 添加字体文件
-    for font_path in FONT_PATHS.values():
-        if Path(font_path).exists():
-            mpl.font_manager.fontManager.addfont(font_path)
-    
-    # 设置默认参数
-    plt.rcParams.update({
-        'font.family': ['sans-serif'],
-        'font.sans-serif': ['SimSun'],  # 中文默认使用宋体
-        'font.serif': ['Times New Roman'],  # 英文默认使用Times New Roman
-        'axes.unicode_minus': False,  # 解决负号显示问题
-        'font.size': 16,  # 默认字体大小
-        'axes.titlesize': 16,
-        'axes.labelsize': 16,
-        'xtick.labelsize': 16,
-        'ytick.labelsize': 16,
-        'legend.fontsize': 16,
-        'figure.figsize': [8, 6],  # 默认图像大小
-        'figure.dpi': 100,  # 默认分辨率
-        'savefig.dpi': 300,  # 保存图片的分辨率
-        'axes.grid': True,  # 默认显示网格
-        'grid.alpha': 0.3,  # 网格透明度
-        'grid.linestyle': '--',  # 网格线型
-        # 设置数学公式字体
-        'mathtext.fontset': 'custom',
-        'mathtext.rm': 'Times New Roman',
-        'mathtext.it': 'Times New Roman:italic',
-        'mathtext.bf': 'Times New Roman:bold',
-        'mathtext.sf': 'Times New Roman',
-        'mathtext.tt': 'Times New Roman',
-        'mathtext.cal': 'Times New Roman',
-        'mathtext.default': 'regular'
-    })
+# 添加字体文件路径
+font_paths = [
+    '/usr/share/fonts/truetype/custom/simsun.ttc',
+    '/usr/share/fonts/truetype/custom/times.ttf',
+    '/usr/share/fonts/windows/simsun.ttc',  # Windows字体路径
+    '/usr/share/fonts/truetype/msttcorefonts/Times_New_Roman.ttf',  # Linux字体路径
+    '/home/yzc/.fonts/simsun.ttc',  # 用户目录字体路径
+    '/home/yzc/.fonts/times.ttf'
+]
 
-# 在导入模块时自动设置样式
-setup_style() 
+# 检查并添加字体
+for font_path in font_paths:
+    if os.path.exists(font_path):
+        fm.fontManager.addfont(font_path)
+
+# 设置全局字体样式
+plt.rcParams['font.family'] = ['Times New Roman', 'SimSun']  # 设置英文和中文字体
+plt.rcParams['font.size'] = 16  # 统一字体大小
+plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
+
+# 设置图形基本样式
+plt.rcParams['figure.figsize'] = [8, 6]  # 默认图像大小
+plt.rcParams['figure.dpi'] = 100  # 显示分辨率
+plt.rcParams['savefig.dpi'] = 300  # 保存分辨率
+
+# 设置网格线样式
+plt.rcParams['axes.grid'] = True  # 默认显示网格线
+plt.rcParams['grid.alpha'] = 0.3  # 网格线透明度
+plt.rcParams['grid.linestyle'] = '--'  # 网格线样式为虚线
+plt.rcParams['grid.color'] = 'gray'  # 网格线颜色
+
+# 设置其他样式
+plt.rcParams['axes.axisbelow'] = True  # 网格线显示在图形下方
+plt.rcParams['axes.labelpad'] = 10  # 轴标签和轴线之间的距离
+plt.rcParams['legend.fontsize'] = 16  # 图例字体大小
+plt.rcParams['xtick.direction'] = 'in'  # 刻度线朝内
+plt.rcParams['ytick.direction'] = 'in'  # 刻度线朝内 
